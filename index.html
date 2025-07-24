@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple FPS Game</title>
+    <title>Enhanced FPS Game</title>
     <style>
         body { margin: 0; overflow: hidden; }
         canvas { display: block; }
-        #menu, #settings { 
+        #menu, #settings, #modMenu { 
             position: absolute; 
             top: 50%; 
             left: 50%; 
@@ -19,7 +19,7 @@
             font-family: Arial, sans-serif;
             display: none;
         }
-        #menu.active, #settings.active { display: block; }
+        #menu.active, #settings.active, #modMenu.active { display: block; }
         button { 
             margin: 10px; 
             padding: 10px 20px; 
@@ -36,11 +36,21 @@
             background: white;
             border-radius: 50%;
         }
+        #fovCircle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border: 1px solid rgba(255, 255, 0, 0.5);
+            border-radius: 50%;
+            display: none;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
     <div id="menu" class="active">
-        <h1>Simple FPS Game</h1>
+        <h1>Enhanced FPS Game</h1>
         <button onclick="startGame()">Play</button><br>
         <button onclick="showSettings()">Settings</button>
     </div>
@@ -49,12 +59,24 @@
         <p>Sensitivity: <input type="range" id="sensitivity" min="0.001" max="0.01" step="0.001" value="0.002"></p>
         <button onclick="backToMenu()">Back</button>
     </div>
+    <div id="modMenu">
+        <h1>Mod Menu</h1>
+        <p><input type="checkbox" id="aimbot"> Aimbot (Right-Click to Aim)</p>
+        <p>Aimbot FOV: <input type="range" id="aimbotFov" min="10" max="90" value="30"></p>
+        <p><input type="checkbox" id="tracers"> Tracers</p>
+        <p><input type="checkbox" id="esp"> ESP Boxes</p>
+        <p><input type="checkbox" id="espHealth"> ESP Health Bars</p>
+        <p><input type="checkbox" id="espDistance"> ESP Distance Labels</p>
+        <button onclick="closeModMenu()">Close</button>
+    </div>
     <div id="crosshair"></div>
+    <div id="fovCircle"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
     <script src="https://unpkg.com/three@0.134.0/examples/js/controls/PointerLockControls.js"></script>
     <script>
-        let scene, camera, renderer, controls, weapon, enemies = [], bullets = [], obstacles = [];
+        let scene, camera, renderer, controls, weapon, enemies = [], bullets = [], obstacles = [], tracers = [], espBoxes = [];
         let isGameRunning = false;
+        let isAiming = false;
         let sensitivity = 0.002;
         const moveSpeed = 5;
         const enemySpeed = 0.02;
@@ -63,6 +85,7 @@
         const velocity = new THREE.Vector3();
         const keys = { w: false, s: false, a: false, d: false };
         let lastTime = performance.now();
+        let mods = { aimbot: false, tracers: false, esp: false, espHealth: false, espDistance: false, aimbotFov: 30 };
 
         function init() {
             scene = new THREE.Scene();
@@ -73,85 +96,133 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // PointerLockControls for better turning
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // PointerLockControls
             controls = new THREE.PointerLockControls(camera, document.body);
+            controls.pointerSpeed = sensitivity;
             scene.add(controls.getObject());
 
             // Skybox
-            const skyboxGeometry = new THREE.BoxGeometry(500, 500, 500);
+            const skyboxGeometry = new THREE.BoxGeometry(1000, 1000, 1000);
             const skyboxMaterials = [
-                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide }), // front
-                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide }), // back
-                new THREE.MeshBasicMaterial({ color: 0xb0e0e6, side: THREE.BackSide }), // top
-                new THREE.MeshBasicMaterial({ color: 0x228b22, side: THREE.BackSide }), // bottom
-                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide }), // left
-                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide })  // right
+                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide }),
+                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide }),
+                new THREE.MeshBasicMaterial({ color: 0xb0e0e6, side: THREE.BackSide }),
+                new THREE.MeshBasicMaterial({ color: 0x228b22, side: THREE.BackSide }),
+                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide }),
+                new THREE.MeshBasicMaterial({ color: 0x87ceeb, side: THREE.BackSide })
             ];
             const skybox = new THREE.Mesh(skyboxGeometry, skyboxMaterials);
             scene.add(skybox);
 
             // Ground
-            const groundGeometry = new THREE.PlaneGeometry(100, 100);
-            const groundMaterial = new THREE.MeshBasicMaterial({ color: 0x228b22 });
+            const groundGeometry = new THREE.PlaneGeometry(200, 200);
+            const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x228b22 });
             const ground = new THREE.Mesh(groundGeometry, groundMaterial);
             ground.rotation.x = -Math.PI / 2;
             scene.add(ground);
 
             // Weapon
             const weaponGeometry = new THREE.BoxGeometry(0.2, 0.1, 0.5);
-            const weaponMaterial = new THREE.MeshBasicMaterial({ color: 0x888888 });
+            const weaponMaterial = new THREE.MeshLambertMaterial({ color: 0x888888 });
             weapon = new THREE.Mesh(weaponGeometry, weaponMaterial);
             weapon.position.set(0.3, -0.2, -0.5);
             camera.add(weapon);
             scene.add(camera);
 
             // Enemies
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < 15; i++) {
+                const scale = 0.8 + Math.random() * 0.7;
                 const enemyGeometry = new THREE.BoxGeometry(1, 1, 1);
-                const enemyMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                const enemyMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
                 const enemy = new THREE.Mesh(enemyGeometry, enemyMaterial);
+                enemy.scale.set(scale, scale, scale);
                 enemy.position.set(
-                    Math.random() * 50 - 25,
-                    0.5,
-                    Math.random() * 50 - 25
+                    Math.random() * 180 - 90,
+                    0.5 * scale,
+                    Math.random() * 180 - 90
                 );
-                enemy.userData = { health: 3 };
+                enemy.userData = { health: 3, maxHealth: 3, scale: scale, healthBar: null, distanceLabel: null };
                 scene.add(enemy);
                 enemies.push(enemy);
             }
 
-            // Scenery (trees)
-            for (let i = 0; i < 10; i++) {
+            // Scenery: Trees
+            for (let i = 0; i < 20; i++) {
                 const treeGeometry = new THREE.CylinderGeometry(0.5, 0.5, 3, 8);
-                const treeMaterial = new THREE.MeshBasicMaterial({ color: 0x8b4513 });
+                const treeMaterial = new THREE.MeshLambertMaterial({ color: 0x8b4513 });
                 const tree = new THREE.Mesh(treeGeometry, treeMaterial);
                 tree.position.set(
-                    Math.random() * 50 - 25,
+                    Math.random() * 180 - 90,
                     1.5,
-                    Math.random() * 50 - 25
+                    Math.random() * 180 - 90
                 );
                 scene.add(tree);
                 obstacles.push(tree);
             }
 
-            // Obstacles (crates)
-            for (let i = 0; i < 8; i++) {
+            // Scenery: Rocks
+            for (let i = 0; i < 10; i++) {
+                const rockGeometry = new THREE.SphereGeometry(1, 8, 8);
+                const rockMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
+                const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+                rock.position.set(
+                    Math.random() * 180 - 90,
+                    0.5,
+                    Math.random() * 180 - 90
+                );
+                scene.add(rock);
+                obstacles.push(rock);
+            }
+
+            // Obstacles: Crates
+            for (let i = 0; i < 15; i++) {
                 const crateGeometry = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-                const crateMaterial = new THREE.MeshBasicMaterial({ color: 0x8b5a2b });
+                const crateMaterial = new THREE.MeshLambertMaterial({ color: 0x8b5a2b });
                 const crate = new THREE.Mesh(crateGeometry, crateMaterial);
                 crate.position.set(
-                    Math.random() * 50 - 25,
+                    Math.random() * 180 - 90,
                     0.75,
-                    Math.random() * 50 - 25
+                    Math.random() * 180 - 90
                 );
                 scene.add(crate);
                 obstacles.push(crate);
             }
 
-            document.addEventListener('click', () => {
-                if (isGameRunning) {
-                    controls.lock();
-                    shoot();
+            // Event Listeners
+            document.addEventListener('click', (event) => {
+                if (isGameRunning && !document.getElementById('modMenu').classList.contains('active')) {
+                    if (event.button === 0) { // Left click
+                        controls.lock();
+                        shoot();
+                    }
+                }
+            });
+
+            document.addEventListener('mousedown', (event) => {
+                if (isGameRunning && event.button === 2) { // Right click
+                    isAiming = true;
+                    camera.fov = 50; // Zoom in when aiming
+                    camera.updateProjectionMatrix();
+                    if (mods.aimbot) {
+                        document.getElementById('fovCircle').style.display = 'block';
+                        updateFovCircle();
+                    }
+                }
+            });
+
+            document.addEventListener('mouseup', (event) => {
+                if (event.button === 2) { // Right click release
+                    isAiming = false;
+                    camera.fov = 75; // Reset zoom
+                    camera.updateProjectionMatrix();
+                    document.getElementById('fovCircle').style.display = 'none';
                 }
             });
 
@@ -162,6 +233,9 @@
                     case 's': keys.s = true; break;
                     case 'a': keys.a = true; break;
                     case 'd': keys.d = true; break;
+                    case ';':
+                        if (isGameRunning) toggleModMenu();
+                        break;
                 }
             });
 
@@ -174,12 +248,34 @@
                 }
             });
 
+            // Mod Menu Controls
+            document.getElementById('aimbot').addEventListener('change', (e) => { 
+                mods.aimbot = e.target.checked; 
+                if (!isAiming) document.getElementById('fovCircle').style.display = 'none';
+            });
+            document.getElementById('tracers').addEventListener('change', (e) => { mods.tracers = e.target.checked; });
+            document.getElementById('esp').addEventListener('change', (e) => { mods.esp = e.target.checked; });
+            document.getElementById('espHealth').addEventListener('change', (e) => { mods.espHealth = e.target.checked; });
+            document.getElementById('espDistance').addEventListener('change', (e) => { mods.espDistance = e.target.checked; });
+            document.getElementById('aimbotFov').addEventListener('input', (e) => {
+                mods.aimbotFov = parseFloat(e.target.value);
+                updateFovCircle();
+            });
+
             animate();
+        }
+
+        function updateFovCircle() {
+            const fovCircle = document.getElementById('fovCircle');
+            const size = 2 * Math.tan((mods.aimbotFov * Math.PI / 180) / 2) * (window.innerHeight / 2) * (75 / camera.fov);
+            fovCircle.style.width = `${size}px`;
+            fovCircle.style.height = `${size}px`;
+            fovCircle.style.display = mods.aimbot && isAiming ? 'block' : 'none';
         }
 
         function shoot() {
             const bulletGeometry = new THREE.SphereGeometry(0.05, 8, 8);
-            const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+            const bulletMaterial = new THREE.MeshLambertMaterial({ color: 0xffff00 });
             const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
             bullet.position.copy(camera.position);
             const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
@@ -196,6 +292,8 @@
                 enemy.material.color.setHSL(0, 1, Math.max(0.2, enemy.userData.health * 0.2));
                 if (enemy.userData.health <= 0) {
                     scene.remove(enemy);
+                    if (enemy.userData.healthBar) scene.remove(enemy.userData.healthBar);
+                    if (enemy.userData.distanceLabel) scene.remove(enemy.userData.distanceLabel);
                     enemies = enemies.filter(e => e !== enemy);
                 }
             }
@@ -213,6 +311,40 @@
                 }
             }
             return false;
+        }
+
+        function createDistanceLabel(distance) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128;
+            canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = 'white';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${Math.round(distance)}m`, 64, 24);
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({ map: texture });
+            const sprite = new THREE.Sprite(material);
+            sprite.scale.set(2, 0.5, 1);
+            return sprite;
+        }
+
+        function toggleModMenu() {
+            const modMenu = document.getElementById('modMenu');
+            if (modMenu.classList.contains('active')) {
+                modMenu.classList.remove('active');
+                controls.lock();
+            } else {
+                modMenu.classList.add('active');
+                controls.unlock();
+            }
+        }
+
+        function closeModMenu() {
+            document.getElementById('modMenu').classList.remove('active');
+            controls.lock();
         }
 
         function animate() {
@@ -246,10 +378,99 @@
                     camera.position.copy(newPosition);
                 }
 
+                // Aimbot (only when aiming)
+                if (mods.aimbot && isAiming) {
+                    let closestEnemy = null;
+                    let minAngle = mods.aimbotFov * Math.PI / 180;
+                    const cameraDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                    enemies.forEach(enemy => {
+                        const directionToEnemy = enemy.position.clone().sub(camera.position).normalize();
+                        const angle = cameraDirection.angleTo(directionToEnemy);
+                        if (angle < minAngle) {
+                            minAngle = angle;
+                            closestEnemy = enemy;
+                        }
+                    });
+                    if (closestEnemy) {
+                        const direction = closestEnemy.position.clone().sub(camera.position).normalize();
+                        camera.lookAt(camera.position.clone().add(direction));
+                        shoot();
+                    }
+                }
+
                 // Update enemies
                 enemies.forEach(enemy => {
                     const direction = camera.position.clone().sub(enemy.position).normalize();
-                    enemy.position.add(direction.multiplyScalar(enemySpeed));
+                    enemy.position.add(direction.multiplyScalar(enemySpeed * enemy.userData.scale));
+                });
+
+                // Tracers
+                tracers.forEach(tracer => scene.remove(tracer));
+                tracers = [];
+                if (mods.tracers) {
+                    enemies.forEach(enemy => {
+                        const geometry = new THREE.BufferGeometry().setFromPoints([
+                            camera.position,
+                            enemy.position
+                        ]);
+                        const material = new THREE.LineBasicMaterial({ color: 0xff0000 });
+                        const line = new THREE.Line(geometry, material);
+                        scene.add(line);
+                        tracers.push(line);
+                    });
+                }
+
+                // ESP Boxes (2D green boxes)
+                espBoxes.forEach(box => scene.remove(box));
+                espBoxes = [];
+                if (mods.esp) {
+                    enemies.forEach(enemy => {
+                        const boxGeometry = new THREE.PlaneGeometry(1 * enemy.userData.scale, 1 * enemy.userData.scale);
+                        const boxMaterial = new THREE.MeshBasicMaterial({ 
+                            color: 0x00ff00, 
+                            transparent: true, 
+                            opacity: 0.5, 
+                            side: THREE.DoubleSide 
+                        });
+                        const box = new THREE.Mesh(boxGeometry, boxMaterial);
+                        box.position.copy(enemy.position);
+                        box.lookAt(camera.position);
+                        scene.add(box);
+                        espBoxes.push(box);
+                    });
+                }
+
+                // ESP Health Bars
+                enemies.forEach(enemy => {
+                    if (enemy.userData.healthBar) {
+                        scene.remove(enemy.userData.healthBar);
+                        enemy.userData.healthBar = null;
+                    }
+                    if (mods.espHealth) {
+                        const healthRatio = enemy.userData.health / enemy.userData.maxHealth;
+                        const healthBarGeometry = new THREE.PlaneGeometry(1 * enemy.userData.scale * healthRatio, 0.1);
+                        const healthBarMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide });
+                        const healthBar = new THREE.Mesh(healthBarGeometry, healthBarMaterial);
+                        healthBar.position.copy(enemy.position).add(new THREE.Vector3(0, 0.7 * enemy.userData.scale, 0));
+                        healthBar.lookAt(camera.position);
+                        scene.add(healthBar);
+                        enemy.userData.healthBar = healthBar;
+                    }
+                });
+
+                // ESP Distance Labels
+                enemies.forEach(enemy => {
+                    if (enemy.userData.distanceLabel) {
+                        scene.remove(enemy.userData.distanceLabel);
+                        enemy.userData.distanceLabel = null;
+                    }
+                    if (mods.espDistance) {
+                        const distance = camera.position.distanceTo(enemy.position);
+                        const label = createDistanceLabel(distance);
+                        label.position.copy(enemy.position).add(new THREE.Vector3(0, 1 * enemy.userData.scale, 0));
+                        scene.add(label);
+                        enemy.userData.distanceLabel = label;
+                    }
                 });
 
                 // Update bullets
@@ -270,6 +491,7 @@
             document.getElementById('menu').classList.remove('active');
             isGameRunning = true;
             document.getElementById('crosshair').style.display = 'block';
+            updateFovCircle();
         }
 
         function showSettings() {
@@ -290,6 +512,7 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            updateFovCircle();
         });
 
         init();
